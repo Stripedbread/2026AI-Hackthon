@@ -20,6 +20,9 @@ data/textbooks/*.txt
 # 上传目录
 data/uploads/
 
+# 推送脚本（仅本地使用）
+push_all.ps1
+
 # 系统文件
 .DS_Store
 Thumbs.db
