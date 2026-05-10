@@ -91,6 +91,7 @@ def handle_upload(files):
             dest = UPLOAD_DIR / f"{bid}{ext}"
             shutil.copy(f.name, str(dest))
             book = parse_textbook(str(dest), bid)
+            book.title = fpath.stem  # 使用原始文件名，而非哈希 ID
             _books[bid] = book
             cache_path = save_to_cache(book)
             results.append(f"✅ {book.title} ({book.format}) — {book.total_pages}页 {book.total_chars:,}字 → 缓存: {cache_path.name}")
