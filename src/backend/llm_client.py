@@ -30,10 +30,15 @@ if "api.openai.com" in BASE_URL:
     API_KEY = QWEN_API_KEY
     MODEL = QWEN_MODEL
 
-# 启动诊断：打印实际使用的 LLM 配置（脱敏）
+# 启动诊断：打印实际使用的 LLM 配置（API Key 中间脱敏）
+def _mask_key(key: str) -> str:
+    if len(key) <= 12:
+        return key[:4] + "****" + key[-4:]
+    return key[:6] + "*" * (len(key) - 10) + key[-4:]
+
 print(f"[LLM Client] BASE_URL = {BASE_URL}")
 print(f"[LLM Client] MODEL    = {MODEL}")
-print(f"[LLM Client] API_KEY  = {API_KEY[:20]}..." if len(API_KEY) > 20 else f"[LLM Client] API_KEY  = {API_KEY}")
+print(f"[LLM Client] API_KEY  = {_mask_key(API_KEY)}")
 
 _client: OpenAI = None
 

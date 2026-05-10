@@ -68,8 +68,8 @@ def _book_list_md():
         return "📭 暂无教材，请上传\n\n> 支持 PDF / Markdown / TXT"
     rows = ["| # | 教材名 | 格式 | 页数 | 字数 | 章节数 | 状态 |",
             "|---|--------|------|------|------|--------|------|"]
-    for bid, b in _books.items():
-        rows.append(f"| {bid} | {b.title} | {b.format} | {b.total_pages} | {b.total_chars:,} | {len(b.chapters)} | ✅ {b.status} |")
+    for i, (bid, b) in enumerate(_books.items(), 1):
+        rows.append(f"| {i} | {b.title} | {b.format} | {b.total_pages} | {b.total_chars:,} | {len(b.chapters)} | ✅ {b.status} |")
     return "\n".join(rows)
 
 # ── Tab 1: 教材上传 ───────────────────────────
@@ -77,7 +77,7 @@ def _book_list_md():
 def handle_upload(files):
     """处理文件上传"""
     if not files:
-        return _book_list_md(), "⚠️ 请先选择文件", gr.update(choices=list(_books.keys()))
+        return _book_list_md(), "⚠️ 请先选择文件", gr.update(choices=_book_choices())
     results = []
     for f in files:
         try:
@@ -94,17 +94,17 @@ def handle_upload(files):
             results.append(f"✅ {book.title} ({book.format}) — {book.total_pages}页 {book.total_chars:,}字")
         except Exception as e:
             results.append(f"❌ {Path(f.name).name}: {e}")
-    return _book_list_md(), "\n".join(results), gr.update(choices=list(_books.keys()))
+    return _book_list_md(), "\n".join(results), gr.update(choices=_book_choices())
 
 
 def load_sample_books():
     """加载 data/textbooks/ 下的示例教材"""
     sample_dir = Path("data/textbooks")
     if not sample_dir.exists():
-        return _book_list_md(), "📭 data/textbooks/ 目录不存在，请手动上传教材", gr.update(choices=list(_books.keys()))
+        return _book_list_md(), "📭 data/textbooks/ 目录不存在，请手动上传教材", gr.update(choices=_book_choices())
     pdfs = list(sample_dir.glob("*.pdf")) + list(sample_dir.glob("*.md")) + list(sample_dir.glob("*.txt"))
     if not pdfs:
-        return _book_list_md(), "📭 data/textbooks/ 下没有教材文件", gr.update(choices=list(_books.keys()))
+        return _book_list_md(), "📭 data/textbooks/ 下没有教材文件", gr.update(choices=_book_choices())
     results = []
     for fpath in pdfs:
         try:
@@ -114,7 +114,7 @@ def load_sample_books():
             results.append(f"✅ {book.title} ({book.format}) — {book.total_pages}页")
         except Exception as e:
             results.append(f"❌ {fpath.name}: {e}")
-    return _book_list_md(), "\n".join(results), gr.update(choices=list(_books.keys()))
+    return _book_list_md(), "\n".join(results), gr.update(choices=_book_choices())
 
 # ── Tab 2: 知识图谱 ───────────────────────────
 
@@ -139,8 +139,13 @@ def get_graph_for_frontend(book_id: str):
     return "{}", "请先构建图谱"
 
 
+def _book_choices():
+    """返回 (书名, textbook_id) 元组列表，用于下拉框显示"""
+    return [(b.title, bid) for bid, b in _books.items()]
+
+
 def get_book_choices():
-    return list(_books.keys())
+    return _book_choices()
 
 # ── Tab 3: 跨教材整合 ─────────────────────────
 
@@ -279,7 +284,7 @@ def create_ui():
             with gr.Tab("🗺️ 知识图谱"):
                 with gr.Row():
                     book_dropdown = gr.Dropdown(
-                        choices=[], label="选择教材", interactive=True
+                        choices=_book_choices(), label="选择教材", interactive=True
                     )
                     build_btn = gr.Button("🔨 构建图谱", variant="primary")
                     build_all_btn = gr.Button("🔨 全部构建", variant="secondary")
