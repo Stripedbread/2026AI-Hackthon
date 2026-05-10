@@ -49,7 +49,7 @@ def _book_list_md():
 def handle_upload(files):
     """处理文件上传"""
     if not files:
-        return _book_list_md(), "⚠️ 请先选择文件"
+        return _book_list_md(), "⚠️ 请先选择文件", gr.update(choices=list(_books.keys()))
     results = []
     for f in files:
         try:
@@ -66,17 +66,17 @@ def handle_upload(files):
             results.append(f"✅ {book.title} ({book.format}) — {book.total_pages}页 {book.total_chars:,}字")
         except Exception as e:
             results.append(f"❌ {Path(f.name).name}: {e}")
-    return _book_list_md(), "\n".join(results)
+    return _book_list_md(), "\n".join(results), gr.update(choices=list(_books.keys()))
 
 
 def load_sample_books():
     """加载 data/textbooks/ 下的示例教材"""
     sample_dir = Path("data/textbooks")
     if not sample_dir.exists():
-        return _book_list_md(), "📭 data/textbooks/ 目录不存在，请手动上传教材"
+        return _book_list_md(), "📭 data/textbooks/ 目录不存在，请手动上传教材", gr.update(choices=list(_books.keys()))
     pdfs = list(sample_dir.glob("*.pdf")) + list(sample_dir.glob("*.md")) + list(sample_dir.glob("*.txt"))
     if not pdfs:
-        return _book_list_md(), "📭 data/textbooks/ 下没有教材文件"
+        return _book_list_md(), "📭 data/textbooks/ 下没有教材文件", gr.update(choices=list(_books.keys()))
     results = []
     for fpath in pdfs:
         try:
@@ -86,7 +86,7 @@ def load_sample_books():
             results.append(f"✅ {book.title} ({book.format}) — {book.total_pages}页")
         except Exception as e:
             results.append(f"❌ {fpath.name}: {e}")
-    return _book_list_md(), "\n".join(results)
+    return _book_list_md(), "\n".join(results), gr.update(choices=list(_books.keys()))
 
 # ── Tab 2: 知识图谱 ───────────────────────────
 
@@ -216,17 +216,17 @@ def chat_with_teacher(message: str, history: list):
     history.append({"role": "assistant", "content": reply})
     return "", history
 
+# ── 全局样式 ──────────────────────────────────
+CSS = """
+.container { max-width: 1400px; margin: auto; }
+.status-ok { color: #2e7d32; }
+footer { visibility: hidden; }
+"""
+
 # ── 构建 Gradio UI ────────────────────────────
 
 def create_ui():
-    css = """
-    .container { max-width: 1400px; margin: auto; }
-    .status-ok { color: #2e7d32; }
-    footer { visibility: hidden; }
-    """
-    theme = gr.themes.Soft(primary_hue="blue")
-
-    with gr.Blocks(theme=theme, css=css, title="学科知识整合智能体") as app:
+    with gr.Blocks(title="学科知识整合智能体") as app:
         gr.Markdown("""# 🧠 学科知识整合智能体
         **多教材知识图谱 | 跨教材去重提纯 | RAG 精准问答 | 教师对话优化**
 
@@ -247,8 +247,8 @@ def create_ui():
                 upload_log = gr.Textbox(label="上传日志", lines=5, interactive=False)
                 book_list = gr.Markdown(_book_list_md(), every=5)
 
-                upload_btn.upload(handle_upload, upload_btn, [book_list, upload_log])
-                load_sample_btn.click(load_sample_books, None, [book_list, upload_log])
+                upload_btn.upload(handle_upload, upload_btn, [book_list, upload_log, book_dropdown])
+                load_sample_btn.click(load_sample_books, None, [book_list, upload_log, book_dropdown])
 
             # ═══════════ Tab 2: 知识图谱 ═══════════
             with gr.Tab("🗺️ 知识图谱"):
@@ -272,10 +272,6 @@ def create_ui():
                     lambda bid: build_graph_for_book(bid) if bid else (None, "请选择一个教材"),
                     book_dropdown, [graph_json, graph_stats]
                 )
-
-                def refresh_choices():
-                    return gr.update(choices=list(_books.keys()))
-                app.load(refresh_choices, None, book_dropdown, every=3)
 
             # ═══════════ Tab 3: 整合 ═══════════
             with gr.Tab("🔀 跨教材整合"):
@@ -394,4 +390,6 @@ if __name__ == "__main__":
         server_port=int(os.getenv("PORT", "7860")),
         share=False,
         show_error=True,
+        theme=gr.themes.Soft(primary_hue="blue"),
+        css=CSS,
     )
