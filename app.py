@@ -290,7 +290,7 @@ def create_ui():
                     index_status = gr.Textbox(label="索引状态", interactive=False)
                 index_btn.click(build_rag_index, None, index_status)
 
-                chatbot_rag = gr.Chatbot(label="RAG 问答", height=400, type="messages")
+                chatbot_rag = gr.Chatbot(label="RAG 问答", height=400)
                 with gr.Row():
                     q_input = gr.Textbox(label="输入问题", placeholder="例如：什么是动作电位？", scale=4)
                     q_btn = gr.Button("提问", variant="primary", scale=1)
@@ -300,7 +300,7 @@ def create_ui():
 
             # ═══════════ Tab 5: 教师对话 ═══════════
             with gr.Tab("👩‍🏫 教师对话"):
-                chatbot_dialogue = gr.Chatbot(label="整合方案讨论", height=400, type="messages")
+                chatbot_dialogue = gr.Chatbot(label="整合方案讨论", height=400)
                 with gr.Row():
                     chat_input = gr.Textbox(label="输入消息", placeholder="例如：为什么把炎症和炎症反应合并了？", scale=4)
                     chat_btn = gr.Button("发送", variant="primary", scale=1)
@@ -387,7 +387,7 @@ def create_ui():
 if __name__ == "__main__":
     app = create_ui()
     app.queue(max_size=20).launch(
-        server_name="0.0.0.0",
+        server_name="127.0.0.1",
         server_port=int(os.getenv("PORT", "7860")),
         share=False,
         show_error=True,
