@@ -18,17 +18,24 @@ QWEN_BASE_URL = "https://ms-ens-f8274faf-bcde.api-inference.modelscope.cn/v1"
 QWEN_API_KEY = "ms-b992cd79-197b-42f7-9c1b-d14c0ed0f9b2"
 QWEN_MODEL = "Qwen/Qwen3-0.6B"
 
-# 环境变量可覆盖（用 MY_LLM_* 前缀避免和 ModelScope 平台默认值冲突）
-BASE_URL = os.getenv("MY_LLM_BASE_URL") or os.getenv("LLM_BASE_URL") or QWEN_BASE_URL
-API_KEY = os.getenv("MY_LLM_API_KEY") or os.getenv("LLM_API_KEY") or QWEN_API_KEY
-MODEL = os.getenv("MY_LLM_MODEL") or os.getenv("LLM_MODEL") or QWEN_MODEL
+# ── 计算最终配置 ──────────────────────────────
+# MY_LLM_* 优先级最高（用户显式设置），否则用 Qwen3 硬编码
+# 无视 LLM_* / OPENAI_* 环境变量 —— ModelScope 服务器会注入错误默认值
+BASE_URL = os.getenv("MY_LLM_BASE_URL") or QWEN_BASE_URL
+API_KEY = os.getenv("MY_LLM_API_KEY") or QWEN_API_KEY
+MODEL = os.getenv("MY_LLM_MODEL") or QWEN_MODEL
 
-# 如果检测到被 ModelScope 注入了 api.openai.com，强制用 Qwen3
-if "api.openai.com" in BASE_URL:
-    print(f"[LLM Client] ⚠️ 检测到 ModelScope 默认 LLM_BASE_URL，强制使用 Qwen3")
-    BASE_URL = QWEN_BASE_URL
-    API_KEY = QWEN_API_KEY
-    MODEL = QWEN_MODEL
+# ── 清除 openai 库会读取的干扰环境变量 ──────────
+# ModelScope 服务器可能注入 OPENAI_BASE_URL=https://api.openai.com/v1
+# 导致 openai 库忽略我们显式传入的参数
+OVERRODE = []
+for _env_var in ["OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_ORG_ID",
+                  "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"]:
+    if os.environ.pop(_env_var, None) is not None:
+        OVERRODE.append(_env_var)
+
+if OVERRODE:
+    print(f"[LLM Client] ⚠️ 已清除干扰环境变量: {', '.join(OVERRODE)}")
 
 # 启动诊断：打印实际使用的 LLM 配置（API Key 中间脱敏）
 def _mask_key(key: str) -> str:
