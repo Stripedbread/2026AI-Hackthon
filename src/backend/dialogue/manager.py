@@ -5,6 +5,7 @@
 
 import os
 from dataclasses import dataclass, field
+from llm_client import call_llm
 
 
 @dataclass
@@ -59,38 +60,6 @@ class DialogueManager:
 
 请回复："""
 
-        reply = _call_llm(prompt, system)
+        reply = call_llm(prompt, system, temperature=0.5)
         session.add("assistant", reply)
         return reply
-
-
-def _call_llm(prompt: str, system: str = "") -> str:
-    import requests
-    key = os.getenv("LLM_API_KEY", "")
-    base = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
-    model = os.getenv("LLM_MODEL", "gpt-3.5-turbo")
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    msgs = []
-    if system:
-        msgs.append({"role": "system", "content": system})
-    msgs.append({"role": "user", "content": prompt})
-    try:
-        r = requests.post(f"{base}/chat/completions", headers=headers,
-                          json={"model": model, "messages": msgs, "temperature": 0.5},
-                          timeout=120)
-        if r.status_code != 200:
-            return f"[LLM Error {r.status_code}]"
-        return r.json()["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"[对话模块] LLM 调用失败: {e}"
-
-
-    def add_user_message(self, session_id: str, content: str):
-        session = self.get_session(session_id)
-        if session:
-            session.add_message("user", content)
-
-    def add_assistant_message(self, session_id: str, content: str):
-        session = self.get_session(session_id)
-        if session:
-            session.add_message("assistant", content)

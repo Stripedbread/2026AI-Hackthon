@@ -5,25 +5,7 @@
 
 import os, re, json
 from typing import Optional
-
-# ── LLM 调用 ──────────────────────────────────
-
-def _call_llm(prompt: str, system: str = "") -> str:
-    import requests
-    key = os.getenv("LLM_API_KEY", "")
-    base = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
-    model = os.getenv("LLM_MODEL", "gpt-3.5-turbo")
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    msgs = []
-    if system:
-        msgs.append({"role": "system", "content": system})
-    msgs.append({"role": "user", "content": prompt})
-    r = requests.post(f"{base}/chat/completions", headers=headers,
-                      json={"model": model, "messages": msgs, "temperature": 0.3},
-                      timeout=120)
-    if r.status_code != 200:
-        raise RuntimeError(f"LLM API error {r.status_code}: {r.text[:300]}")
-    return r.json()["choices"][0]["message"]["content"]
+from llm_client import call_llm
 
 # ── Prompt 模板 ───────────────────────────────
 
@@ -62,7 +44,7 @@ def extract_knowledge_nodes(textbook_name: str, chapter_title: str, content: str
     """从章节提取知识点节点"""
     prompt = build_extraction_prompt(textbook_name, chapter_title, content)
     try:
-        raw = _call_llm(prompt, SYS_EXTRACT)
+        raw = call_llm(prompt, SYS_EXTRACT, temperature=0.3)
         m = re.search(r'\[.*\]', raw, re.DOTALL)
         if m:
             return json.loads(m.group())
@@ -89,7 +71,7 @@ def extract_relations(nodes: list) -> list:
     summary = "\n".join(f"- {n.get('name','')}: {n.get('definition','')[:60]}" for n in nodes)
     prompt = PROMPT_RELATION.format(points=summary)
     try:
-        raw = _call_llm(prompt, SYS_RELATION)
+        raw = call_llm(prompt, SYS_RELATION, temperature=0.3)
         m = re.search(r'\[.*\]', raw, re.DOTALL)
         if m:
             return json.loads(m.group())

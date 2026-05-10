@@ -57,7 +57,7 @@ CHAPTER_PATTERNS = [
     (re.compile(r'^\s*\d+\.\d+\.\d+\s'), 4),
     (re.compile(r'^\s*\d+\.\d+\s'), 3),
     (re.compile(r'^\s*\d+[\.\、]\s'), 2),
-    (re.compile(r'^\s*[\[（(][一二三四五六七八九十\d]+[\]）)]\s'), 2),
+    (re.compile(r'^\s*[\[（(][一二三四五六七八九十\d]+[\]）)]\s*'), 2),
 ]
 
 def _detect_level(text: str) -> int:
@@ -94,6 +94,7 @@ def parse_pdf(filepath: str, textbook_id: str) -> TextbookInfo:
             if lv >= 1 and lv <= 3 and len(line) < 80:
                 if cur:
                     cur.page_end = pg + 1
+                    cur.char_count = len(cur.content)
                     chapters.append(cur)
                 counter += 1
                 cur = Chapter(
@@ -105,6 +106,7 @@ def parse_pdf(filepath: str, textbook_id: str) -> TextbookInfo:
                 cur.content += line + "\n"
     if cur:
         cur.page_end = book.total_pages
+        cur.char_count = len(cur.content)
         chapters.append(cur)
     doc.close()
     book.chapters = chapters
@@ -137,6 +139,7 @@ def parse_text(filepath: str, textbook_id: str) -> TextbookInfo:
             title = line.lstrip('#').strip()
             if lv <= 3:
                 if cur:
+                    cur.char_count = len(cur.content)
                     chapters.append(cur)
                 counter += 1
                 cur = Chapter(
@@ -146,6 +149,7 @@ def parse_text(filepath: str, textbook_id: str) -> TextbookInfo:
         elif cur:
             cur.content += line + "\n"
     if cur:
+        cur.char_count = len(cur.content)
         chapters.append(cur)
     if not chapters:
         chapters.append(Chapter(

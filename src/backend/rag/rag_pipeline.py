@@ -131,22 +131,7 @@ class VectorIndex:
 
 # ── Generate ──────────────────────────────────
 
-def _call_llm(prompt: str, system: str = "") -> str:
-    import requests
-    key = os.getenv("LLM_API_KEY", "")
-    base = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
-    model = os.getenv("LLM_MODEL", "gpt-3.5-turbo")
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    msgs = []
-    if system:
-        msgs.append({"role": "system", "content": system})
-    msgs.append({"role": "user", "content": prompt})
-    r = requests.post(f"{base}/chat/completions", headers=headers,
-                      json={"model": model, "messages": msgs, "temperature": 0.3},
-                      timeout=120)
-    if r.status_code != 200:
-        return f"[LLM Error {r.status_code}]"
-    return r.json()["choices"][0]["message"]["content"]
+from llm_client import call_llm
 
 
 RAG_SYSTEM = """你是学科教学助手。只基于提供的教材内容回答问题。
@@ -185,7 +170,7 @@ def rag_query(question: str, vector_index: VectorIndex, top_k: int = 5) -> RAGRe
         for c in citations
     ]
     prompt = build_rag_prompt(question, chunks_for_prompt)
-    answer = _call_llm(prompt, RAG_SYSTEM)
+    answer = call_llm(prompt, RAG_SYSTEM, temperature=0.3)
 
     return RAGResponse(
         answer=answer,
