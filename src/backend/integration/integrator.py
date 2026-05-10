@@ -66,19 +66,7 @@ def _get_embedding(text: str) -> np.ndarray:
     except ImportError:
         pass
 
-    # fallback: 使用 LLM API embedding
-    import requests
-    key = os.getenv("MY_LLM_API_KEY") or os.getenv("LLM_API_KEY") or "ms-b992cd79-197b-42f7-9c1b-d14c0ed0f9b2"
-    base = os.getenv("MY_LLM_BASE_URL") or os.getenv("LLM_BASE_URL") or "https://ms-ens-f8274faf-bcde.api-inference.modelscope.cn/v1"
-    r = requests.post(
-        f"{base}/embeddings",
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        json={"model": "text-embedding-3-small", "input": text},
-        timeout=30
-    )
-    if r.status_code == 200:
-        emb = np.array(r.json()["data"][0]["embedding"])
-        return emb / np.linalg.norm(emb)
+    # fallback: LLM API 不支持 embedding，直接返回零向量
     return np.zeros(384)
 
 

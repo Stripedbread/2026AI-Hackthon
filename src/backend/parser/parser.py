@@ -333,3 +333,66 @@ def parse_textbook(filepath: str, textbook_id: str) -> TextbookInfo:
         raise ValueError(f"不支持格式: .{ext}，支持: {list(PARSERS.keys())}")
     return fn(filepath, textbook_id)
 
+
+# ── Cache 管理 ──────────────────────────────────
+
+CACHE_DIR = Path("cache")
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def save_to_cache(book: TextbookInfo) -> Path:
+    """将解析结果保存到 ./cache/ 目录 (JSON 格式)"""
+    cache_path = CACHE_DIR / f"{book.textbook_id}.json"
+    cache_path.write_text(
+        json.dumps(book.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return cache_path
+
+
+def load_from_cache(textbook_id: str) -> Optional[TextbookInfo]:
+    """从 ./cache/ 加载已缓存的解析结果"""
+    cache_path = CACHE_DIR / f"{textbook_id}.json"
+    if not cache_path.exists():
+        return None
+    data = json.loads(cache_path.read_text(encoding="utf-8"))
+    chapters = [
+        Chapter(
+            chapter_id=c["chapter_id"],
+            title=c["title"],
+            level=c.get("level", 1),
+            page_start=c.get("page_start", 1),
+            page_end=c.get("page_end", 1),
+            content=c.get("content", ""),
+            char_count=c.get("char_count", 0),
+        )
+        for c in data.get("chapters", [])
+    ]
+    return TextbookInfo(
+        textbook_id=data["textbook_id"],
+        filename=data["filename"],
+        title=data["title"],
+        format=data.get("format", "unknown"),
+        total_pages=data.get("total_pages", 0),
+        total_chars=data.get("total_chars", 0),
+        chapters=chapters,
+        status=data.get("status", "done"),
+    )
+
+
+def list_cache() -> list:
+    """列出 ./cache/ 中所有缓存文件"""
+    if not CACHE_DIR.exists():
+        return []
+    return sorted(
+        [p.stem for p in CACHE_DIR.glob("*.json")],
+        key=lambda x: (CACHE_DIR / f"{x}.json").stat().st_mtime,
+        reverse=True,
+    )
+
+
+def clear_cache():
+    """清空 ./cache/ 目录"""
+    for p in CACHE_DIR.glob("*.json"):
+        p.unlink()
+

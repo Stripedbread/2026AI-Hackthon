@@ -18,7 +18,7 @@ load_dotenv()
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent / "src" / "backend"))
 
-from backend.parser.parser import parse_textbook, TextbookInfo, PARSERS
+from backend.parser.parser import parse_textbook, TextbookInfo, PARSERS, save_to_cache, load_from_cache, list_cache
 from backend.knowledge.extractor import build_knowledge_graph, graph_to_echarts, merge_graphs
 from backend.integration.integrator import integrate_graphs, IntegrationResult
 from backend.rag.rag_pipeline import TextChunker, VectorIndex, rag_query, RAGResponse
@@ -28,23 +28,24 @@ from backend.dialogue.manager import DialogueManager
 print("=" * 50)
 print("[自检] 模块导入完成")
 
-# 网络连通性测试
+# 网络连通性测试（5秒超时，失败不影响启动）
 try:
     import requests
     r = requests.get("https://ms-ens-f8274faf-bcde.api-inference.modelscope.cn/v1/models", 
                      headers={"Authorization": "Bearer ms-b992cd79-197b-42f7-9c1b-d14c0ed0f9b2"},
-                     timeout=10)
+                     timeout=5)
     print(f"[自检] API 连通性: HTTP {r.status_code}")
 except Exception as e:
-    print(f"[自检] ⚠️ 网络不通: {e}")
+    print(f"[自检] ⚠️ 网络不通: {type(e).__name__}: {str(e)[:120]}")
 
-# LLM 快速测试
+# LLM 快速测试（10秒超时，失败不影响启动）
 try:
+    import signal
     from llm_client import call_llm
     test_reply = call_llm("回复OK", "你只回复OK两个字母", temperature=0.1)
     print(f"[自检] LLM 测试: {test_reply[:80]}")
 except Exception as e:
-    print(f"[自检] ⚠️ LLM 调用失败: {e}")
+    print(f"[自检] ⚠️ LLM 调用失败: {type(e).__name__}: {str(e)[:200]}")
 
 print("=" * 50)
 
@@ -77,7 +78,7 @@ def _book_list_md():
 def handle_upload(files):
     """处理文件上传"""
     if not files:
-        return _book_list_md(), "⚠️ 请先选择文件", gr.update(choices=_book_choices())
+        return _book_list_md(), "⚠️ 请先选择文件"
     results = []
     for f in files:
         try:
@@ -91,30 +92,37 @@ def handle_upload(files):
             shutil.copy(f.name, str(dest))
             book = parse_textbook(str(dest), bid)
             _books[bid] = book
-            results.append(f"✅ {book.title} ({book.format}) — {book.total_pages}页 {book.total_chars:,}字")
+            cache_path = save_to_cache(book)
+            results.append(f"✅ {book.title} ({book.format}) — {book.total_pages}页 {book.total_chars:,}字 → 缓存: {cache_path.name}")
         except Exception as e:
             results.append(f"❌ {Path(f.name).name}: {e}")
-    return _book_list_md(), "\n".join(results), gr.update(choices=_book_choices())
+    return _book_list_md(), "\n".join(results)
+
+
+def _refresh_dropdown():
+    """刷新教材下拉框 — 作为独立函数确保 Gradio 6.x 正确更新"""
+    return gr.update(choices=_book_choices(), value=None)
 
 
 def load_sample_books():
     """加载 data/textbooks/ 下的示例教材"""
     sample_dir = Path("data/textbooks")
     if not sample_dir.exists():
-        return _book_list_md(), "📭 data/textbooks/ 目录不存在，请手动上传教材", gr.update(choices=_book_choices())
+        return _book_list_md(), "📭 data/textbooks/ 目录不存在，请手动上传教材"
     pdfs = list(sample_dir.glob("*.pdf")) + list(sample_dir.glob("*.md")) + list(sample_dir.glob("*.txt"))
     if not pdfs:
-        return _book_list_md(), "📭 data/textbooks/ 下没有教材文件", gr.update(choices=_book_choices())
+        return _book_list_md(), "📭 data/textbooks/ 下没有教材文件"
     results = []
     for fpath in pdfs:
         try:
             bid = f"book_{uuid.uuid4().hex[:6]}"
             book = parse_textbook(str(fpath), bid)
             _books[bid] = book
+            save_to_cache(book)
             results.append(f"✅ {book.title} ({book.format}) — {book.total_pages}页")
         except Exception as e:
             results.append(f"❌ {fpath.name}: {e}")
-    return _book_list_md(), "\n".join(results), gr.update(choices=_book_choices())
+    return _book_list_md(), "\n".join(results)
 
 # ── Tab 2: 知识图谱 ───────────────────────────
 
@@ -408,8 +416,11 @@ def create_ui():
                 report_btn.click(generate_report, None, report_md)
 
         # ── 跨 Tab 事件绑定（所有组件定义完毕后） ──
-        upload_btn.upload(handle_upload, upload_btn, [book_list, upload_log, book_dropdown])
-        load_sample_btn.click(load_sample_books, None, [book_list, upload_log, book_dropdown])
+        # 使用 .then() 链式调用确保 Gradio 6.x 中下拉框正确刷新
+        upload_btn.upload(fn=handle_upload, inputs=upload_btn, outputs=[book_list, upload_log])\
+                  .then(fn=_refresh_dropdown, outputs=book_dropdown)
+        load_sample_btn.click(fn=load_sample_books, outputs=[book_list, upload_log])\
+                      .then(fn=_refresh_dropdown, outputs=book_dropdown)
 
         # 底部状态栏
         gr.Markdown("---\n浙江大学未来学习中心 · AI 生态 2026年5月 | 学科知识整合智能体 v1.0")
