@@ -134,28 +134,80 @@ class VectorIndex:
 from llm_client import call_llm
 
 
-RAG_SYSTEM = """你是学科教学助手。只基于提供的教材内容回答问题。
-规则：
-1. 只使用上下文中的信息，不编造
-2. 每个回答附带引用来源：[教材名, 章节, 页码]
-3. 如果上下文中找不到答案，回复"当前知识库中未找到相关信息"
-4. 回答简洁准确"""
+RAG_SYSTEM = """你是学科教学助手。你面前有一份教材原文摘录。
+
+# 回答流程（按顺序执行）
+1. 先读「教材原文」中的全部内容
+2. 找出与问题相关的段落
+3. 基于相关段落组织答案，标注 [来源X]
+4. 判断：教材信息是否足够完整回答问题？
+   - 足够 → 只输出「📖 教材内容」段落即可
+   - 不足 → 再加「💡 补充」段落，说明哪些是教材外的知识
+
+# 严格禁止
+- 禁止在「📖 教材内容」中编造教材里没有的话
+- 禁止把个人知识伪装成教材内容
+- 禁止跳过教材直接用自己的知识回答
+
+# 输出格式
+📖 **教材内容**：
+（引用教材原文中的信息，标注 [来源X]）
+
+💡 **补充**（仅在教材信息不足时添加）：
+⚠️ 以下非教材原文，来自个人知识：
+（补充教材未覆盖的内容）"""
 
 
 def build_rag_prompt(question: str, chunks: list[Chunk]) -> str:
-    ctx = "\n\n---\n\n".join(
-        f"[来源: {c.textbook_name}, {c.chapter_title}, p{c.page}]\n{c.text}"
-        for c in chunks
-    )
-    return f"""请基于以下教材内容回答问题。
+    ctx_parts = []
+    for i, c in enumerate(chunks, 1):
+        ctx_parts.append(
+            f"[来源{i}] 《{c.textbook_name}》{c.chapter_title} 第{c.page}页:\n"
+            f"{c.text}"
+        )
+    ctx = "\n\n---\n\n".join(ctx_parts)
 
-## 参考资料
+    return f"""## 教材原文（以下是你唯一可以引用的教材内容）
+
 {ctx}
 
+---
 ## 问题
 {question}
 
-请给出答案并附上引用来源。"""
+## 请执行以下步骤
+第一步：阅读上面的全部教材原文。
+第二步：判断教材原文是否包含与问题相关的信息。
+第三步：
+- 如果相关 → 输出「📖 **教材内容**」段落，引用原文并标注 [来源编号]
+- 如果教材信息完整 → 结束，不要加补充
+- 如果教材信息不够 → 再加「💡 **补充**」段落，必须以"⚠️ 以下非教材原文"开头
+- 如果完全无关 → 回复"当前提供的教材片段中未找到相关信息"，然后可以补充自己的知识
+"""
+
+
+def build_rag_prompt(question: str, chunks: list[Chunk]) -> str:
+    ctx_parts = []
+    for i, c in enumerate(chunks, 1):
+        ctx_parts.append(
+            f"[来源{i}] 《{c.textbook_name}》{c.chapter_title} 第{c.page}页:\n"
+            f"{c.text}"
+        )
+    ctx = "\n\n---\n\n".join(ctx_parts)
+
+    return f"""## 教材原文（必须基于此作答）
+
+{ctx}
+
+---
+## 问题
+{question}
+
+请按照以下格式回答：
+1. 先写「📖 **教材内容**」段落：引用教材原文中与问题相关的信息，标注 [来源编号]
+2. 如果教材覆盖完整则结束；如果不完整，再加「💡 **补充**」段落并说明"以下非教材原文"
+3. 如果教材内容与问题完全无关，回复"当前提供的教材片段中未找到相关信息"
+"""
 
 
 def rag_query(question: str, vector_index: VectorIndex, top_k: int = 5) -> RAGResponse:

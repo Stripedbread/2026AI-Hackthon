@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src" / "backend"))
 
 from backend.parser.parser import parse_textbook, TextbookInfo, PARSERS, save_to_cache, load_from_cache, list_cache
 from backend.knowledge.extractor import build_knowledge_graph, graph_to_echarts, merge_graphs
-from backend.integration.integrator import integrate_graphs, IntegrationResult, compress_book_contents, run_step2_pipeline
+from backend.integration.integrator import integrate_graphs, IntegrationResult, compress_book_contents, run_step2_pipeline, save_compressed_to_cache
 from backend.rag.rag_pipeline import TextChunker, VectorIndex, rag_query, RAGResponse
 from backend.dialogue.manager import DialogueManager
 
@@ -187,19 +187,24 @@ def handle_upload_and_compress(files, progress=gr.Progress()) -> tuple:
 
         try:
             compressed = compress_book_contents(book_dict, target_ratio=0.30,
-                                                progress_callback=cb)
+                                                progress_callback=cb,
+                                                method="extractive")
             orig_c = compressed.get("original_chars", 0)
             comp_c = compressed.get("total_chars", 0)
             ratio = compressed.get("compression_ratio", 1.0)
+
+            # 保存压缩结果到 cache 目录
+            saved_path = save_compressed_to_cache(compressed)
 
             _compression_info[bid] = {
                 "compression_ratio": ratio,
                 "original_chars": orig_c,
                 "compressed_chars": comp_c,
                 "status": "completed",
+                "saved_path": saved_path,
             }
             compress_log.append(
-                f"✅ {book.title}: {orig_c:,} → {comp_c:,} 字 ({ratio*100:.1f}%)"
+                f"✅ {book.title}: {orig_c:,} → {comp_c:,} 字 ({ratio*100:.1f}%) → 💾 {saved_path}"
             )
         except Exception as e:
             _compression_info[bid] = {
@@ -253,19 +258,24 @@ def run_auto_compression(progress=gr.Progress()) -> tuple:
 
         try:
             compressed = compress_book_contents(book_dict, target_ratio=0.30,
-                                                progress_callback=cb)
+                                                progress_callback=cb,
+                                                method="extractive")
             orig_c = compressed.get("original_chars", 0)
             comp_c = compressed.get("total_chars", 0)
             ratio = compressed.get("compression_ratio", 1.0)
+
+            # 保存压缩结果到 cache 目录
+            saved_path = save_compressed_to_cache(compressed)
 
             _compression_info[bid] = {
                 "compression_ratio": ratio,
                 "original_chars": orig_c,
                 "compressed_chars": comp_c,
                 "status": "completed",
+                "saved_path": saved_path,
             }
             log_lines.append(
-                f"✅ {book.title}: {orig_c:,} → {comp_c:,} 字 ({ratio*100:.1f}%)"
+                f"✅ {book.title}: {orig_c:,} → {comp_c:,} 字 ({ratio*100:.1f}%) → 💾 {saved_path}"
             )
         except Exception as e:
             _compression_info[bid] = {

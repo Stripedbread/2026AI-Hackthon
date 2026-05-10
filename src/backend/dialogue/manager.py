@@ -11,6 +11,7 @@
 import re, json
 from dataclasses import dataclass, field
 from llm_client import chat as llm_chat, call_llm
+from .retriever import KeywordRetriever, extract_keywords
 
 
 # ══════════════════════════════════════════════════════════
@@ -21,29 +22,33 @@ TEACHER_SYSTEM_PROMPT = """# 身份
 你是「学科知识整合智能体」的AI教师对话模块。你是一个专业的医学教育知识整合顾问。
 
 # 背景
-系统已将多本医学教材（如《生理学》《病理学》《传染病学》等）解析、构建知识图谱，并通过语义对齐算法完成了跨教材知识点整合。整合过程中产生了若干决策：合并重复知识点、保留唯一表述、删除冗余内容。
+系统已将多本医学教材（如《生理学》《病理学》《传染病学》等）解析、构建知识图谱，并通过语义对齐算法完成了跨教材知识点整合。
 
 # 你的职责
-1. 向教师解释每一项整合决策的理由（为什么合并、为什么删除）
-2. 根据教师的反馈调整整合方案
-3. 回答教师关于整合结果的任何问题
+1. 向教师解释每一项整合决策的理由
+2. 根据教师的反馈调整整合方案（保留/拆分/合并知识点）
+3. 回答教师关于教材知识点的任何问题
 
-# 对话规则
-- 始终用专业、清晰的中文回答
-- 回答要有依据，引用具体的教材名和知识点名
-- 如果教师提出修改意见，先确认理解，再说明你会如何调整
-- 只讨论与教材整合、知识点、教学方法相关的话题
+# 知识问题回答规则（极其重要）
+当上下文中包含「🔍 关键词检索结果」时，你必须严格按以下步骤回答：
+- **第一步**：从检索结果中逐字摘录与问题直接相关的句子，放在 > 引用块中
+- **第二步**：用你自己的话解释这段原文
+- **禁止**：自己编造一句话然后贴上 [来源N] 标签——摘录必须是检索结果中真实存在的文字
+- 如果检索结果中确实没有相关内容，回复"当前教材中未检索到相关信息"，然后可以补充自己的知识
+
+# 整合决策回答规则
+- 引用具体的教材名和知识点名
+- 如果教师提出修改意见，先确认理解，再说明如何调整
+- 回答控制在 200 字以内
+
+# 无关话题
 - 如果被问到无关话题（如天气、娱乐），礼貌拒绝并引导回正题
-- 回答控制在 200 字以内，简洁有力
 
 # 修改指令识别
-当教师明确提出修改要求时，你需要识别以下意图：
-- KEEP: 教师认为某个知识点不应被删除，应当保留
-- SPLIT: 教师认为被合并的两个知识点应当分开
-- MERGE: 教师认为两个未合并的知识点应当合并
-- EXPLAIN: 教师询问某项决策的理由（默认，无需特殊标记）
-
-对于 KEEP/SPLIT/MERGE 意图，在回复末尾附加一行 JSON：
+当教师明确提出修改要求时，识别以下意图并在回复末尾附加 JSON：
+- KEEP: 保留被删除的知识点
+- SPLIT: 拆分被合并的知识点
+- MERGE: 合并两个知识点
 ```action
 {"intent": "KEEP", "target": "知识点名称", "reason": "教师理由摘要"}
 ```"""
@@ -73,7 +78,23 @@ AI：您说得对。「抗原」指能诱导免疫应答的物质，侧重免疫
 {"intent": "SPLIT", "target": "抗原/免疫原", "reason": "教师指出抗原和免疫原概念不同，前者是上位概念"}
 ```
 
-### 示例4：无关话题
+### 示例4：知识性问题（逐字引用检索结果）
+教师：什么是静息电位？
+（上下文包含检索结果：
+[来源1] 《03_生理学》第二章 细胞的基本功能 p36:
+"静息状态下细胞膜对K+的通透性最高，是因为细胞膜中存在持续开放的非门控钾通道...静息电位也就越接近该离子的平衡电位。")
+
+AI：> "静息状态下细胞膜对K+的通透性最高…静息电位也就越接近该离子的平衡电位。" ——《03_生理学》第二章 p36
+
+即静息电位主要由细胞膜对钾离子的高通透性决定，K⁺ 顺浓度差外流使膜内变负、膜外变正，最终接近 K⁺ 的平衡电位。
+
+### 示例5：知识性问题（检索结果不足时）
+教师：新冠肺炎的病理机制是什么？
+（检索结果中无相关内容）
+
+AI：当前教材中未检索到新冠肺炎相关信息。以下为个人知识补充：COVID-19 由 SARS-CoV-2 病毒引起，通过 ACE2 受体入侵细胞，引发细胞因子风暴导致肺组织损伤。如需详细机制请参考《传染病学》教材。
+
+### 示例6：无关话题
 教师：今天天气怎么样？
 AI：抱歉，我是学科知识整合顾问，只讨论教材整合和知识点相关的话题。请问您对整合结果有什么疑问或修改意见吗？"""
 
@@ -107,12 +128,13 @@ class DialogueSession:
 # ══════════════════════════════════════════════════════════
 
 class DialogueManager:
-    """AI 教师对话管理器"""
+    """AI 教师对话管理器 — 含关键词检索注入"""
 
     MAX_HISTORY = 12  # 保留最近 12 轮对话（24 条消息）
 
     def __init__(self):
         self.sessions: dict[str, DialogueSession] = {}
+        self.retriever = KeywordRetriever()
 
     def get_or_create(self, sid: str) -> DialogueSession:
         if sid not in self.sessions:
@@ -154,6 +176,27 @@ class DialogueManager:
                 + f" | 置信度: {confidence:.0%}"
             )
         return "\n".join(lines)
+
+    @staticmethod
+    def _is_knowledge_question(user_msg: str) -> bool:
+        """判断是否为知识性问题（需要检索教材内容）"""
+        knowledge_patterns = [
+            r'什么是', r'解释', r'说明', r'介绍一下', r'讲讲',
+            r'定义', r'概念', r'原理', r'机制', r'功能',
+            r'如何', r'怎么', r'为什么', r'区别', r'对比',
+            r'关系', r'作用', r'特点', r'分类',
+        ]
+        # 非知识性问题（整合决策相关）
+        decision_patterns = [
+            r'为什么.*合并', r'为什么.*删除', r'保留', r'拆分',
+            r'分开', r'分开', r'整合决策', r'压缩',
+        ]
+        msg = user_msg.strip()
+        # 如果明显是整合决策询问，不触发检索
+        if any(re.search(p, msg) for p in decision_patterns):
+            return False
+        # 如果匹配知识模式，触发检索
+        return any(re.search(p, msg) for p in knowledge_patterns)
 
     @staticmethod
     def _format_textbook_summary(books: dict) -> str:
@@ -204,10 +247,13 @@ class DialogueManager:
 
         # 教材摘要
         state_books = session.integration_state.get("books")
-        if state_books or books:
+        active_books = state_books or books
+        if active_books:
             context_parts.append(
-                self._format_textbook_summary(state_books or books)
+                self._format_textbook_summary(active_books)
             )
+            # 索引教材以便关键词检索
+            self.retriever.index_books(active_books)
 
         # 整合决策摘要
         decisions_data = (
@@ -215,6 +261,12 @@ class DialogueManager:
         )
         if decisions_data:
             context_parts.append(self._format_decisions(decisions_data))
+
+        # ── 关键词检索：提取关键词 → 搜索教材 → 注入相关原文 ──
+        if active_books and self._is_knowledge_question(user_msg):
+            retrieved = self.retriever.retrieve_and_format(user_msg, top_n=4)
+            if retrieved:
+                context_parts.append(retrieved)
 
         context = "\n\n".join(context_parts) if context_parts else ""
 
