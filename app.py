@@ -84,32 +84,6 @@ def _book_list_md():
 
 # ── Tab 1: 教材上传（含自动压缩） ───────────
 
-def handle_upload(files):
-    """处理文件上传（仅解析，不压缩）"""
-    if not files:
-        return _book_list_md(), "⚠️ 请先选择文件", "⏳ 等待上传..."
-    results = []
-    for f in files:
-        try:
-            fpath = Path(f.name)
-            ext = fpath.suffix.lower()
-            if ext not in ['.pdf', '.md', '.txt', '.docx']:
-                results.append(f"⚠️ {fpath.name}: 不支持的格式")
-                continue
-            bid = f"book_{uuid.uuid4().hex[:6]}"
-            dest = UPLOAD_DIR / f"{bid}{ext}"
-            shutil.copy(f.name, str(dest))
-            book = parse_textbook(str(dest), bid)
-            book.title = fpath.stem  # 使用原始文件名，而非哈希 ID
-            _books[bid] = book
-            cache_path = save_to_cache(book)
-            results.append(f"✅ {book.title} ({book.format}) — {book.total_pages}页 {book.total_chars:,}字 → 缓存: {cache_path.name}")
-        except Exception as e:
-            results.append(f"❌ {Path(f.name).name}: {e}")
-    return _book_list_md(), "\n".join(results), "🔄 解析完成，等待压缩..."
-
-
-
 def handle_upload_and_compress(files, progress=gr.Progress()) -> tuple:
     """
     上传文件 + 解析 + 自动压缩（集成 gr.Progress 进度条）
@@ -287,6 +261,68 @@ def run_auto_compression(progress=gr.Progress()) -> tuple:
             log_lines.append(f"❌ {book.title}: 压缩失败 - {e}")
 
     return _book_list_md(), "\n".join(log_lines)
+
+
+def handle_delete_book(book_id: str) -> tuple:
+    """删除指定教材，清理内存状态和磁盘文件"""
+    global _integration
+
+    if not book_id or book_id not in _books:
+        return _book_list_md(), _refresh_dropdown(), f"⚠️ 请先选择要删除的教材"
+
+    book = _books[book_id]
+    title = book.title
+    bid = book_id
+    cleaned = []
+
+    # 1. 清理内存状态
+    del _books[bid]
+    cleaned.append("内存: _books")
+
+    if bid in _graphs:
+        del _graphs[bid]
+        cleaned.append("_graphs")
+
+    if bid in _compression_info:
+        del _compression_info[bid]
+        cleaned.append("_compression_info")
+
+    # 清除整合结果（数据已变化，需重新整合）
+    if _integration is not None:
+        _integration = None
+        cleaned.append("_integration（已重置）")
+
+    # 2. 清理磁盘文件：data/uploads/ 下的上传文件
+    upload_cleaned = 0
+    if UPLOAD_DIR.exists():
+        for ext in [".pdf", ".md", ".txt", ".docx"]:
+            fpath = UPLOAD_DIR / f"{bid}{ext}"
+            if fpath.exists():
+                fpath.unlink()
+                upload_cleaned += 1
+
+    # 3. 清理磁盘文件：cache/ 下的缓存文件
+    cache_cleaned = 0
+    cache_dir = Path("cache")
+    if cache_dir.exists():
+        for pattern in [f"{bid}.json", f"{bid}_compressed.json"]:
+            for fpath in cache_dir.glob(pattern):
+                fpath.unlink()
+                cache_cleaned += 1
+
+    # 4. 清理磁盘文件：output/ 下的图谱文件
+    output_cleaned = 0
+    if OUTPUT_DIR.exists():
+        for fpath in OUTPUT_DIR.glob(f"{bid}_kg.json"):
+            fpath.unlink()
+            output_cleaned += 1
+
+    log_msg = (
+        f"🗑️ 已删除《{title}》({bid})\n"
+        f"清理状态: {', '.join(cleaned)}\n"
+        f"磁盘文件: uploads {upload_cleaned} | cache {cache_cleaned} | output {output_cleaned}"
+    )
+    return _book_list_md(), _refresh_dropdown(), log_msg
 
 
 def _refresh_dropdown():
@@ -484,6 +520,16 @@ def create_ui():
                 )
                 book_list = gr.Markdown(_book_list_md(), every=5)
 
+                # ── 删除教材 ──
+                gr.Markdown("---\n### 🗑️ 删除教材")
+                with gr.Row():
+                    delete_dropdown = gr.Dropdown(
+                        choices=_book_choices(), label="选择要删除的教材",
+                        interactive=True, scale=3
+                    )
+                    delete_btn = gr.Button("🗑️ 确认删除", variant="stop", scale=1)
+                delete_log = gr.Textbox(label="删除日志", lines=3, interactive=False)
+
             # ═══════════ Tab 2: 知识图谱 ═══════════
             with gr.Tab("🗺️ 知识图谱"):
                 with gr.Row():
@@ -616,11 +662,18 @@ def create_ui():
         # 上传 → 自动压缩（带进度条）→ 刷新下拉框
         upload_btn.upload(fn=handle_upload_and_compress, inputs=upload_btn,
                          outputs=[book_list, upload_log, compress_progress])\
-                  .then(fn=_refresh_dropdown, outputs=book_dropdown)
+                  .then(fn=_refresh_dropdown, outputs=book_dropdown)\
+                  .then(fn=_refresh_dropdown, outputs=delete_dropdown)
         load_sample_btn.click(fn=load_sample_books, outputs=[book_list, upload_log])\
                       .then(fn=lambda: "🔄 正在自动压缩内容...", outputs=compress_progress)\
                       .then(fn=run_auto_compression, outputs=[book_list, compress_progress])\
-                      .then(fn=_refresh_dropdown, outputs=book_dropdown)
+                      .then(fn=_refresh_dropdown, outputs=book_dropdown)\
+                      .then(fn=_refresh_dropdown, outputs=delete_dropdown)
+
+        # 删除 → 刷新教材列表 + 两个下拉框
+        delete_btn.click(fn=handle_delete_book, inputs=delete_dropdown,
+                        outputs=[book_list, delete_dropdown, delete_log])\
+                 .then(fn=_refresh_dropdown, outputs=book_dropdown)
 
         # 底部状态栏
         gr.Markdown("---\n浙江大学未来学习中心 · AI 生态 2026年5月 | 学科知识整合智能体 v1.0")
