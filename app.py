@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src" / "backend"))
 
 from backend.parser.parser import parse_textbook, TextbookInfo, PARSERS, save_to_cache, load_from_cache, list_cache
 from backend.knowledge.extractor import build_knowledge_graph, graph_to_echarts, merge_graphs
-from backend.integration.integrator import integrate_graphs, IntegrationResult
+from backend.integration.integrator import integrate_graphs, IntegrationResult, compress_book_contents, run_step2_pipeline
 from backend.rag.rag_pipeline import TextChunker, VectorIndex, rag_query, RAGResponse
 from backend.dialogue.manager import DialogueManager
 
@@ -60,25 +60,34 @@ _graphs: dict = {}          # textbook_id → graph dict
 _vector_idx = VectorIndex()
 _dialogue = DialogueManager()
 _integration: IntegrationResult = None
+_compression_info: dict = {}  # textbook_id → {"compression_ratio": float, "original_chars": int, "compressed_chars": int, "status": str}
 
 # ── 辅助函数 ──────────────────────────────────
 
 def _book_list_md():
-    """生成教材列表 Markdown"""
+    """生成教材列表 Markdown（含压缩状态）"""
     if not _books:
         return "📭 暂无教材，请上传\n\n> 支持 PDF / Markdown / TXT"
-    rows = ["| # | 教材名 | 格式 | 页数 | 字数 | 章节数 | 状态 |",
-            "|---|--------|------|------|------|--------|------|"]
+    rows = ["| # | 教材名 | 格式 | 页数 | 字数 | 章节数 | 压缩 | 状态 |",
+            "|---|--------|------|------|------|--------|------|------|"]
     for i, (bid, b) in enumerate(_books.items(), 1):
-        rows.append(f"| {i} | {b.title} | {b.format} | {b.total_pages} | {b.total_chars:,} | {len(b.chapters)} | ✅ {b.status} |")
+        # 压缩状态
+        comp_info = _compression_info.get(bid, {})
+        if comp_info:
+            ratio = comp_info.get("compression_ratio", 1.0)
+            comp_status = f"{ratio*100:.1f}%"
+        else:
+            comp_status = "⏳ 待压缩"
+        status_icon = "✅" if b.status == "completed" else "⏳"
+        rows.append(f"| {i} | {b.title} | {b.format} | {b.total_pages} | {b.total_chars:,} | {len(b.chapters)} | {comp_status} | {status_icon} {b.status} |")
     return "\n".join(rows)
 
-# ── Tab 1: 教材上传 ───────────────────────────
+# ── Tab 1: 教材上传（含自动压缩） ───────────
 
 def handle_upload(files):
-    """处理文件上传"""
+    """处理文件上传（仅解析，不压缩）"""
     if not files:
-        return _book_list_md(), "⚠️ 请先选择文件"
+        return _book_list_md(), "⚠️ 请先选择文件", "⏳ 等待上传..."
     results = []
     for f in files:
         try:
@@ -97,7 +106,177 @@ def handle_upload(files):
             results.append(f"✅ {book.title} ({book.format}) — {book.total_pages}页 {book.total_chars:,}字 → 缓存: {cache_path.name}")
         except Exception as e:
             results.append(f"❌ {Path(f.name).name}: {e}")
-    return _book_list_md(), "\n".join(results)
+    return _book_list_md(), "\n".join(results), "🔄 解析完成，等待压缩..."
+
+
+
+def handle_upload_and_compress(files, progress=gr.Progress()) -> tuple:
+    """
+    上传文件 + 解析 + 自动压缩（集成 gr.Progress 进度条）
+    上传完成后自动对新增教材执行内容压缩，前端显示进度条。
+    """
+    global _compression_info
+
+    if not files:
+        return _book_list_md(), "⚠️ 请先选择文件", "⏳ 等待上传..."
+
+    # ── Phase 1: 解析上传的文件 ──
+    progress(0.0, desc="📤 正在解析文件...")
+    results = []
+    newly_added = []
+
+    total_files = len(files)
+    for fi, f in enumerate(files):
+        try:
+            fpath = Path(f.name)
+            ext = fpath.suffix.lower()
+            if ext not in ['.pdf', '.md', '.txt', '.docx']:
+                results.append(f"⚠️ {fpath.name}: 不支持的格式")
+                continue
+            bid = f"book_{uuid.uuid4().hex[:6]}"
+            dest = UPLOAD_DIR / f"{bid}{ext}"
+            shutil.copy(f.name, str(dest))
+            book = parse_textbook(str(dest), bid)
+            book.title = fpath.stem
+            _books[bid] = book
+            cache_path = save_to_cache(book)
+            results.append(f"✅ {book.title} ({book.format}) — {book.total_pages}页 {book.total_chars:,}字")
+            newly_added.append(bid)
+        except Exception as e:
+            results.append(f"❌ {Path(f.name).name}: {e}")
+
+        progress((fi + 1) / total_files * 0.15, desc=f"📤 解析: {fi+1}/{total_files}")
+
+    if not newly_added:
+        return _book_list_md(), "\n".join(results), "⚠️ 没有新文件需要压缩"
+
+    # ── Phase 2: 内容压缩（占 15%→100% 进度） ──
+    progress(0.15, desc="🔍 准备压缩...")
+    compress_log = []
+
+    # 计算总有效章节数
+    all_valid_chs = []
+    for bid in newly_added:
+        book_dict = _books[bid].to_dict()
+        valid = [(bid, c) for c in book_dict.get("chapters", [])
+                 if c.get("char_count", 0) > 100]
+        all_valid_chs.extend(valid)
+
+    total_chapters = len(all_valid_chs)
+    completed = 0
+
+    for bid in newly_added:
+        book = _books[bid]
+        book_dict = book.to_dict()
+
+        valid_chapters = [c for c in book_dict.get("chapters", [])
+                         if c.get("char_count", 0) > 100]
+        n_chapters = len(valid_chapters)
+        compress_log.append(f"📦 {book.title}: {n_chapters} 个章节待压缩")
+
+        def make_cb(_bid, _title):
+            nonlocal completed
+            def cb(pct: float, desc: str):
+                nonlocal completed
+                chapter_progress = completed + pct
+                overall = 0.15 + (chapter_progress / max(total_chapters, 1)) * 0.85
+                progress(min(overall, 1.0), desc=desc)
+            return cb
+
+        cb = make_cb(bid, book.title)
+
+        try:
+            compressed = compress_book_contents(book_dict, target_ratio=0.30,
+                                                progress_callback=cb)
+            orig_c = compressed.get("original_chars", 0)
+            comp_c = compressed.get("total_chars", 0)
+            ratio = compressed.get("compression_ratio", 1.0)
+
+            _compression_info[bid] = {
+                "compression_ratio": ratio,
+                "original_chars": orig_c,
+                "compressed_chars": comp_c,
+                "status": "completed",
+            }
+            compress_log.append(
+                f"✅ {book.title}: {orig_c:,} → {comp_c:,} 字 ({ratio*100:.1f}%)"
+            )
+        except Exception as e:
+            _compression_info[bid] = {
+                "compression_ratio": 1.0,
+                "original_chars": 0,
+                "compressed_chars": 0,
+                "status": f"失败: {str(e)[:50]}",
+            }
+            compress_log.append(f"❌ {book.title}: 压缩失败 - {e}")
+
+        completed += n_chapters
+
+    progress(1.0, desc="✅ 压缩全部完成！")
+    return _book_list_md(), "\n".join(results), "\n".join(compress_log)
+
+
+def run_auto_compression(progress=gr.Progress()) -> tuple:
+    """
+    对所有已上传但尚未压缩的教材自动执行内容压缩。
+    通过 gr.Progress() 在前端显示进度条。
+    """
+    global _compression_info
+
+    # 找出需要压缩的教材
+    pending = [(bid, b) for bid, b in _books.items()
+               if bid not in _compression_info]
+
+    if not pending:
+        return _book_list_md(), "✅ 所有教材均已压缩完成"
+
+    total = len(pending)
+    log_lines = []
+
+    for bi, (bid, book) in enumerate(pending):
+        book_dict = book.to_dict()
+
+        # 筛选有效章节
+        valid_chapters = [c for c in book_dict.get("chapters", [])
+                         if c.get("char_count", 0) > 100]
+        n_chapters = len(valid_chapters)
+        log_lines.append(f"📦 {book.title}: {n_chapters} 个有效章节待压缩")
+
+        # 定义进度回调（闭包捕获当前 book 的进度）
+        def make_callback(_title, _bi, _total, _n_ch):
+            def cb(pct: float, desc: str):
+                book_progress = (_bi + pct) / _total
+                progress(book_progress, desc=f"[{_bi+1}/{_total}] {desc}")
+            return cb
+
+        cb = make_callback(book.title, bi, total, n_chapters)
+
+        try:
+            compressed = compress_book_contents(book_dict, target_ratio=0.30,
+                                                progress_callback=cb)
+            orig_c = compressed.get("original_chars", 0)
+            comp_c = compressed.get("total_chars", 0)
+            ratio = compressed.get("compression_ratio", 1.0)
+
+            _compression_info[bid] = {
+                "compression_ratio": ratio,
+                "original_chars": orig_c,
+                "compressed_chars": comp_c,
+                "status": "completed",
+            }
+            log_lines.append(
+                f"✅ {book.title}: {orig_c:,} → {comp_c:,} 字 ({ratio*100:.1f}%)"
+            )
+        except Exception as e:
+            _compression_info[bid] = {
+                "compression_ratio": 1.0,
+                "original_chars": 0,
+                "compressed_chars": 0,
+                "status": f"失败: {str(e)[:50]}",
+            }
+            log_lines.append(f"❌ {book.title}: 压缩失败 - {e}")
+
+    return _book_list_md(), "\n".join(log_lines)
 
 
 def _refresh_dropdown():
@@ -253,7 +432,7 @@ def chat_with_teacher(message: str, history: list):
         return "", history
     sid = "default_session"
     decisions = _integration.decisions if _integration else None
-    reply = _dialogue.chat(sid, message, decisions)
+    reply = _dialogue.chat(sid, message, decisions, books=_books)
     history.append({"role": "user", "content": message})
     history.append({"role": "assistant", "content": reply})
     return "", history
@@ -287,6 +466,12 @@ def create_ui():
                     with gr.Column(scale=1):
                         load_sample_btn = gr.Button("📂 加载示例教材", variant="secondary")
                 upload_log = gr.Textbox(label="上传日志", lines=5, interactive=False)
+
+                # 压缩进度条
+                compress_progress = gr.Textbox(
+                    label="压缩进度", value="⏳ 等待上传文件...",
+                    lines=2, interactive=False, elem_classes=["compress-progress"]
+                )
                 book_list = gr.Markdown(_book_list_md(), every=5)
 
             # ═══════════ Tab 2: 知识图谱 ═══════════
@@ -418,9 +603,13 @@ def create_ui():
 
         # ── 跨 Tab 事件绑定（所有组件定义完毕后） ──
         # 使用 .then() 链式调用确保 Gradio 6.x 中下拉框正确刷新
-        upload_btn.upload(fn=handle_upload, inputs=upload_btn, outputs=[book_list, upload_log])\
+        # 上传 → 自动压缩（带进度条）→ 刷新下拉框
+        upload_btn.upload(fn=handle_upload_and_compress, inputs=upload_btn,
+                         outputs=[book_list, upload_log, compress_progress])\
                   .then(fn=_refresh_dropdown, outputs=book_dropdown)
         load_sample_btn.click(fn=load_sample_books, outputs=[book_list, upload_log])\
+                      .then(fn=lambda: "🔄 正在自动压缩内容...", outputs=compress_progress)\
+                      .then(fn=run_auto_compression, outputs=[book_list, compress_progress])\
                       .then(fn=_refresh_dropdown, outputs=book_dropdown)
 
         # 底部状态栏
