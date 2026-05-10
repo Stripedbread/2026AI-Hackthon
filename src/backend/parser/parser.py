@@ -145,8 +145,10 @@ def parse_pdf(filepath: str, textbook_id: str) -> TextbookInfo:
 
             # ── 主模式: 第X篇 / 第X章 ──
             if is_primary and lv >= 1 and lv <= 2 and len(stripped) < 80:
-                # 运行页眉去重: 同名主章节已存在 → 跳过（页眉重复）
-                if stripped in recent_primary_titles:
+                # 标准化标题（统一 Unicode 空白字符，防止"第十章 "和"第十章 "被视为不同）
+                normalized_title = re.sub(r'[\s\u3000\u00A0\u2000-\u200F\u2028-\u202F]+', ' ', stripped).strip()
+                # 运行页眉去重: 同名主章节已存在 → 跳过
+                if normalized_title in recent_primary_titles:
                     continue
 
                 if cur:
@@ -172,7 +174,7 @@ def parse_pdf(filepath: str, textbook_id: str) -> TextbookInfo:
                     title=stripped, level=lv,
                     page_start=pg + 1, page_end=pg + 1,
                 )
-                recent_primary_titles[stripped] = len(chapters) - 1
+                recent_primary_titles[normalized_title] = len(chapters) - 1
 
             # ── 子模式: 第X节 / 编号 → 仅在已有章节内 ──
             elif not is_primary and lv >= 1 and lv <= 3 and len(stripped) < 80:

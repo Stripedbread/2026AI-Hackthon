@@ -18,10 +18,17 @@ QWEN_BASE_URL = "https://ms-ens-f8274faf-bcde.api-inference.modelscope.cn/v1"
 QWEN_API_KEY = "ms-b992cd79-197b-42f7-9c1b-d14c0ed0f9b2"
 QWEN_MODEL = "Qwen/Qwen3-0.6B"
 
-# 兼容旧的环境变量配置（优先级：环境变量 > .env > 硬编码 Qwen3）
-BASE_URL = os.getenv("LLM_BASE_URL", QWEN_BASE_URL)
-API_KEY = os.getenv("LLM_API_KEY", QWEN_API_KEY)
-MODEL = os.getenv("LLM_MODEL", QWEN_MODEL)
+# 环境变量可覆盖（用 MY_LLM_* 前缀避免和 ModelScope 平台默认值冲突）
+BASE_URL = os.getenv("MY_LLM_BASE_URL") or os.getenv("LLM_BASE_URL") or QWEN_BASE_URL
+API_KEY = os.getenv("MY_LLM_API_KEY") or os.getenv("LLM_API_KEY") or QWEN_API_KEY
+MODEL = os.getenv("MY_LLM_MODEL") or os.getenv("LLM_MODEL") or QWEN_MODEL
+
+# 如果检测到被 ModelScope 注入了 api.openai.com，强制用 Qwen3
+if "api.openai.com" in BASE_URL:
+    print(f"[LLM Client] ⚠️ 检测到 ModelScope 默认 LLM_BASE_URL，强制使用 Qwen3")
+    BASE_URL = QWEN_BASE_URL
+    API_KEY = QWEN_API_KEY
+    MODEL = QWEN_MODEL
 
 # 启动诊断：打印实际使用的 LLM 配置（脱敏）
 print(f"[LLM Client] BASE_URL = {BASE_URL}")
@@ -56,9 +63,17 @@ def chat(messages: list[dict], temperature: float = 0.5, max_tokens: int = 2048)
                 delta = chunk.choices[0].delta
                 if delta.content:
                     full_text += delta.content
-        return full_text or "[LLM 返回为空]"
+        if not full_text:
+            return f"[LLM 返回为空] BASE_URL={BASE_URL} MODEL={MODEL} API_KEY前缀={API_KEY[:15]}..."
+        return full_text
     except Exception as e:
-        return f"[LLM 调用失败: {e}]"
+        import traceback
+        detail = traceback.format_exc()
+        # 截取关键错误信息
+        short = str(e)[:300]
+        print(f"[LLM ERROR] {short}")
+        print(f"[LLM TRACE] {detail[:500]}")
+        return f"[LLM 调用失败] {type(e).__name__}: {short}"
 
 
 def chat_stream(messages: list[dict], temperature: float = 0.5, max_tokens: int = 2048):

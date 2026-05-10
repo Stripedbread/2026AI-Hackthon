@@ -24,6 +24,30 @@ from backend.integration.integrator import integrate_graphs, IntegrationResult
 from backend.rag.rag_pipeline import TextChunker, VectorIndex, rag_query, RAGResponse
 from backend.dialogue.manager import DialogueManager
 
+# ── 启动自检 ──────────────────────────────────
+print("=" * 50)
+print("[自检] 模块导入完成")
+
+# 网络连通性测试
+try:
+    import requests
+    r = requests.get("https://ms-ens-f8274faf-bcde.api-inference.modelscope.cn/v1/models", 
+                     headers={"Authorization": "Bearer ms-b992cd79-197b-42f7-9c1b-d14c0ed0f9b2"},
+                     timeout=10)
+    print(f"[自检] API 连通性: HTTP {r.status_code}")
+except Exception as e:
+    print(f"[自检] ⚠️ 网络不通: {e}")
+
+# LLM 快速测试
+try:
+    from llm_client import call_llm
+    test_reply = call_llm("回复OK", "你只回复OK两个字母", temperature=0.1)
+    print(f"[自检] LLM 测试: {test_reply[:80]}")
+except Exception as e:
+    print(f"[自检] ⚠️ LLM 调用失败: {e}")
+
+print("=" * 50)
+
 # ── 全局状态 ──────────────────────────────────
 UPLOAD_DIR = Path("data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
