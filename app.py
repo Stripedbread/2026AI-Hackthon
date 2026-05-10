@@ -247,9 +247,6 @@ def create_ui():
                 upload_log = gr.Textbox(label="上传日志", lines=5, interactive=False)
                 book_list = gr.Markdown(_book_list_md(), every=5)
 
-                upload_btn.upload(handle_upload, upload_btn, [book_list, upload_log, book_dropdown])
-                load_sample_btn.click(load_sample_books, None, [book_list, upload_log, book_dropdown])
-
             # ═══════════ Tab 2: 知识图谱 ═══════════
             with gr.Tab("🗺️ 知识图谱"):
                 with gr.Row():
@@ -376,6 +373,10 @@ def create_ui():
 """
 
                 report_btn.click(generate_report, None, report_md)
+
+        # ── 跨 Tab 事件绑定（所有组件定义完毕后） ──
+        upload_btn.upload(handle_upload, upload_btn, [book_list, upload_log, book_dropdown])
+        load_sample_btn.click(load_sample_books, None, [book_list, upload_log, book_dropdown])
 
         # 底部状态栏
         gr.Markdown("---\n浙江大学未来学习中心 · AI 生态 2026年5月 | 学科知识整合智能体 v1.0")
