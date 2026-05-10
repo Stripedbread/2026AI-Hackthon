@@ -50,9 +50,14 @@ class TextbookInfo:
 
 
 # ── 章节模式 ──────────────────────────────────
-CHAPTER_PATTERNS = [
+# 主模式: 始终触发新章节（第X篇、第X章）
+PRIMARY_PATTERNS = [
     (re.compile(r'^\s*第[一二三四五六七八九十百千\d]+篇\s'), 1),
     (re.compile(r'^\s*第[一二三四五六七八九十百千\d]+章\s'), 2),
+]
+
+# 子模式: 仅在已有章节内触发子章节（第X节、编号、括号编号）
+SECONDARY_PATTERNS = [
     (re.compile(r'^\s*第[一二三四五六七八九十百千\d]+节\s'), 3),
     (re.compile(r'^\s*\d+\.\d+\.\d+\s'), 4),
     (re.compile(r'^\s*\d+\.\d+\s'), 3),
@@ -60,11 +65,36 @@ CHAPTER_PATTERNS = [
     (re.compile(r'^\s*[\[（(][一二三四五六七八九十\d]+[\]）)]\s*'), 2),
 ]
 
-def _detect_level(text: str) -> int:
-    for pat, lv in CHAPTER_PATTERNS:
+# 页眉/页脚过滤: 纯数字、罗马数字、短于4字符的行
+HEADER_FOOTER_RE = re.compile(
+    r'^\s*(\d{1,4}|[IVXivx]+|[A-Z]-\d+)\s*$'
+)
+
+def _is_header_footer(line: str) -> bool:
+    """判断是否为页眉或页脚"""
+    line = line.strip()
+    if not line:
+        return True
+    if len(line) <= 3:
+        return True
+    if HEADER_FOOTER_RE.match(line):
+        return True
+    return False
+
+def _detect_level_primary(text: str):
+    """检测主模式，返回 (level, is_primary)"""
+    for pat, lv in PRIMARY_PATTERNS:
         if pat.match(text):
-            return lv
-    return 0
+            return lv, True
+    for pat, lv in SECONDARY_PATTERNS:
+        if pat.match(text):
+            return lv, False
+    return 0, False
+
+def _detect_level(text: str) -> int:
+    """兼容旧接口"""
+    lv, _ = _detect_level_primary(text)
+    return lv
 
 
 # ── 各格式解析器 ──────────────────────────────
@@ -84,14 +114,71 @@ def parse_pdf(filepath: str, textbook_id: str) -> TextbookInfo:
     chapters = []
     cur = None
     counter = 0
+    preface_content = ""       # 第一个主章节前的所有内容
+    preface_start_page = 1
+    found_first_primary = False
+    recent_primary_titles = {}  # title → chapter index (用于去重页眉)
+
     for pg in range(len(doc)):
         text = doc[pg].get_text("text")
-        for line in text.split('\n'):
-            line = line.strip()
-            if not line:
+        lines = text.split('\n')
+
+        # ── TOC 检测: 一页中有 >= 4 条主模式行 → 目录页，全部归前言 ──
+        primary_matches_on_page = sum(
+            1 for line in lines
+            if _detect_level_primary(line.strip())[1]
+            and len(line.strip()) < 80
+        )
+        is_toc_page = primary_matches_on_page >= 4
+
+        for line in lines:
+            stripped = line.strip()
+            if _is_header_footer(stripped):
                 continue
-            lv = _detect_level(line)
-            if lv >= 1 and lv <= 3 and len(line) < 80:
+
+            lv, is_primary = _detect_level_primary(stripped)
+
+            # ── TOC 页面: 全部内容归前言，不创建章节 ──
+            if is_toc_page:
+                preface_content += stripped + "\n"
+                continue
+
+            # ── 主模式: 第X篇 / 第X章 ──
+            if is_primary and lv >= 1 and lv <= 2 and len(stripped) < 80:
+                # 运行页眉去重: 同名主章节已存在 → 跳过（页眉重复）
+                if stripped in recent_primary_titles:
+                    continue
+
+                if cur:
+                    cur.page_end = pg + 1
+                    cur.char_count = len(cur.content)
+                    chapters.append(cur)
+
+                # 如果之前有前言内容，先保存
+                if not found_first_primary and preface_content.strip():
+                    counter += 1
+                    chapters.append(Chapter(
+                        chapter_id=f"ch_{counter:02d}",
+                        title="前言 / 序言",
+                        level=0,
+                        page_start=preface_start_page,
+                        page_end=pg,
+                        content=preface_content,
+                    ))
+                found_first_primary = True
+                counter += 1
+                cur = Chapter(
+                    chapter_id=f"ch_{counter:02d}",
+                    title=stripped, level=lv,
+                    page_start=pg + 1, page_end=pg + 1,
+                )
+                recent_primary_titles[stripped] = len(chapters) - 1
+
+            # ── 子模式: 第X节 / 编号 → 仅在已有章节内 ──
+            elif not is_primary and lv >= 1 and lv <= 3 and len(stripped) < 80:
+                if not found_first_primary:
+                    preface_content += stripped + "\n"
+                    continue
                 if cur:
                     cur.page_end = pg + 1
                     cur.char_count = len(cur.content)
@@ -99,20 +186,63 @@ def parse_pdf(filepath: str, textbook_id: str) -> TextbookInfo:
                 counter += 1
                 cur = Chapter(
                     chapter_id=f"ch_{counter:02d}",
-                    title=line, level=lv,
+                    title=stripped, level=lv,
                     page_start=pg + 1, page_end=pg + 1,
                 )
             elif cur:
-                cur.content += line + "\n"
+                cur.content += stripped + "\n"
+            elif not found_first_primary:
+                if not preface_content:
+                    preface_start_page = pg + 1
+                preface_content += stripped + "\n"
+
+    # 保存最后一个章节
     if cur:
         cur.page_end = book.total_pages
         cur.char_count = len(cur.content)
         chapters.append(cur)
+
+    # 如果全书都没有主章节，将全部内容作为前言
+    if not found_first_primary and preface_content.strip():
+        chapters.insert(0, Chapter(
+            chapter_id="ch_00",
+            title="前言 / 全书内容",
+            level=0,
+            page_start=1,
+            page_end=book.total_pages,
+            content=preface_content,
+        ))
+
+    # ── 后处理: 合并连续同名章节 ──
+    chapters = _merge_duplicate_chapters(chapters)
+
     doc.close()
     book.chapters = chapters
     book.total_chars = sum(c.char_count for c in chapters)
     book.status = "done"
     return book
+
+
+def _merge_duplicate_chapters(chapters: list) -> list:
+    """合并连续同名章节（处理极少量的 TOC 边缘情况）"""
+    if len(chapters) <= 1:
+        return chapters
+    merged = []
+    i = 0
+    while i < len(chapters):
+        cur_ch = chapters[i]
+        j = i + 1
+        while j < len(chapters) and chapters[j].title == cur_ch.title:
+            if chapters[j].content:
+                cur_ch.content += chapters[j].content
+            cur_ch.page_end = max(cur_ch.page_end, chapters[j].page_end)
+            cur_ch.char_count = len(cur_ch.content)
+            j += 1
+        merged.append(cur_ch)
+        i = j
+    for idx, ch in enumerate(merged):
+        ch.chapter_id = f"ch_{idx + 1:02d}"
+    return merged
 
 
 def parse_text(filepath: str, textbook_id: str) -> TextbookInfo:

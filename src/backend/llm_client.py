@@ -6,15 +6,27 @@
 import os
 from openai import OpenAI
 
+# 加载 .env（确保在任何导入路径下都能读到配置）
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # ── Qwen3 ModelScope 配置 ──────────────────────
 QWEN_BASE_URL = "https://ms-ens-f8274faf-bcde.api-inference.modelscope.cn/v1"
 QWEN_API_KEY = "ms-b992cd79-197b-42f7-9c1b-d14c0ed0f9b2"
 QWEN_MODEL = "Qwen/Qwen3-0.6B"
 
-# 兼容旧的环境变量配置（优先级：环境变量 > 默认 Qwen3）
+# 兼容旧的环境变量配置（优先级：环境变量 > .env > 硬编码 Qwen3）
 BASE_URL = os.getenv("LLM_BASE_URL", QWEN_BASE_URL)
 API_KEY = os.getenv("LLM_API_KEY", QWEN_API_KEY)
 MODEL = os.getenv("LLM_MODEL", QWEN_MODEL)
+
+# 启动诊断：打印实际使用的 LLM 配置（脱敏）
+print(f"[LLM Client] BASE_URL = {BASE_URL}")
+print(f"[LLM Client] MODEL    = {MODEL}")
+print(f"[LLM Client] API_KEY  = {API_KEY[:20]}..." if len(API_KEY) > 20 else f"[LLM Client] API_KEY  = {API_KEY}")
 
 _client: OpenAI = None
 

@@ -9,6 +9,10 @@ import os, sys, uuid, json, tempfile, shutil
 from pathlib import Path
 from datetime import datetime
 import gradio as gr
+from dotenv import load_dotenv
+
+# 加载 .env 文件（本地开发用，服务器上会优先用平台环境变量）
+load_dotenv()
 
 # 确保 src 在路径中
 sys.path.insert(0, str(Path(__file__).parent / "src"))
