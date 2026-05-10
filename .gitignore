@@ -4,3 +4,22 @@ __pycache__/
 .vscode/
 *.egg-info/
 /test/
+/note/
+steps.md
+CLAUDE.md
+
+# 教材数据（不上传GitHub）
+data/textbooks/*.pdf
+data/textbooks/*.md
+data/textbooks/*.txt
+*.pdf
+
+# 环境配置
+.env
+
+# 上传目录
+data/uploads/
+
+# 系统文件
+.DS_Store
+Thumbs.db

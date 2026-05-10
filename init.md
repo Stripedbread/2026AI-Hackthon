@@ -141,3 +141,5 @@ git push
 | 提交推送 | `git add . && git commit -m "msg" && git push` |
 | 安装依赖 | `pip install -r requirements.txt` |
 | 本地运行 | `python app.py` |
+
+# 为提高开发效率，全程不使用虚拟环境
