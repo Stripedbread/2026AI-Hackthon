@@ -111,17 +111,13 @@ AI：## 《03_生理学》共 13 章
 
 如需了解某章的具体内容，请告诉我章节编号。
 
-### 示例7：询问某一章内容
+### 示例7：询问某一章内容（使用教材原文开头）
 教师：告诉我第一章讲了啥
-（上下文包含第一章子节列表）
+（上下文包含教材原文：『生理学是研究生物体正常生命活动规律的科学…』）
 
-AI：第一章「绪论」涵盖以下内容：
-- 第一节 生理学的研究对象和任务
-- 第二节 生理学的常用研究方法
-- 第三节 生命活动的基本特征（新陈代谢、兴奋性、适应性）
-- ...
+AI：> "生理学是研究生物体正常生命活动规律的科学…" ——《03_生理学》第一章 p24
 
-这一章是全书的基础，定义了生理学的研究范围和核心概念。
+第一章「绪论」共16,996字，涵盖生理学的研究对象、常用研究方法、生命活动基本特征和人体内自动控制系统等内容。如需了解某一节详情请告诉我。
 
 ### 示例8：无关话题
 教师：今天天气怎么样？
@@ -274,44 +270,48 @@ class DialogueManager:
 
     @staticmethod
     def _format_chapter_detail(books: dict, chapter_num: int) -> str:
-        """获取某一章的子节详情"""
+        """获取某一章的内容摘要，格式化为可直接引用的文本"""
         if not books:
             return ""
+        import re as _re
         parts = []
+        zhang_re = _re.compile(r'第[一二三四五六七八九十\d]{1,3}\s*章')
+
         for bid, b in books.items():
             title = getattr(b, "title", str(b)[:30])
             chapters = getattr(b, "chapters", [])
 
-            # 匹配第X章的主章节
-            import re as _re
-            target_patterns = [
-                _re.compile(rf'第\s*[一二三四五六七八九十\d]{{1,3}}\s*[章篇]'),
-            ]
-            main_chs = [
-                (i, c) for i, c in enumerate(chapters)
-                if any(p.match(c.title if hasattr(c, 'title') else c.get('title', ''))
-                       for p in target_patterns)
-                and (c.char_count if hasattr(c, 'char_count') else c.get('char_count', 0)) > 50
-            ]
+            main_chs = []
+            for i, c in enumerate(chapters):
+                ct = c.title if hasattr(c, 'title') else c.get('title', '')
+                cc = c.char_count if hasattr(c, 'char_count') else c.get('char_count', 0)
+                if zhang_re.match(ct) and cc > 50:
+                    main_chs.append((i, c))
 
-            if chapter_num <= len(main_chs):
-                idx, main_ch = main_chs[chapter_num - 1]
-                ch_title = main_ch.title if hasattr(main_ch, 'title') else main_ch.get('title', '')
-                ch_page = main_ch.page_start if hasattr(main_ch, 'page_start') else main_ch.get('page_start', 1)
+            if chapter_num > len(main_chs):
+                continue
 
-                # 收集该主章节下的子节
-                parts.append(f"## 《{title}》{ch_title} (起始页: {ch_page})\n")
-                next_main_idx = main_chs[chapter_num][0] if chapter_num < len(main_chs) else len(chapters)
-                subs = chapters[idx + 1 : next_main_idx]
-                # 只取前20个子节
-                for s in subs[:20]:
-                    st = s.title if hasattr(s, 'title') else s.get('title', '')
-                    sp = s.page_start if hasattr(s, 'page_start') else s.get('page_start', 1)
-                    sc = s.char_count if hasattr(s, 'char_count') else s.get('char_count', 0)
-                    if sc > 20:
-                        parts.append(f"- {st} (p{sp}, {sc}字)")
-                if len(subs) > 20:
-                    parts.append(f"... 共 {len(subs)} 个子节")
+            _idx, ch = main_chs[chapter_num - 1]
+            ch_title = ch.title if hasattr(ch, 'title') else ch.get('title', '')
+            ch_page = ch.page_start if hasattr(ch, 'page_start') else ch.get('page_start', 1)
+            ch_page_end = ch.page_end if hasattr(ch, 'page_end') else ch.get('page_end', 1)
+            ch_content = ch.content if hasattr(ch, 'content') else ch.get('content', '')
+            ch_chars = ch.char_count if hasattr(ch, 'char_count') else ch.get('char_count', 0)
+
+            # 取内容前 300 字，在句号处截断
+            preview = ch_content[:300]
+            if len(ch_content) > 300:
+                last_period = max(preview.rfind('。'), preview.rfind('；'))
+                if last_period > 100:
+                    preview = preview[:last_period + 1]
+
+            parts.append(
+                f'## {ch_title}（《{title}》第{ch_page}-{ch_page_end}页，共{ch_chars:,}字）\n'
+                f'\n'
+                f'以下为教材原文（>>>和<<<之间）。请在回答中引用这段原文：\n'
+                f'\n'
+                f'>>>\n{preview}\n<<<\n'
+            )
         return "\n".join(parts) if parts else ""
 
     @staticmethod
@@ -378,20 +378,25 @@ class DialogueManager:
         if decisions_data:
             context_parts.append(self._format_decisions(decisions_data))
 
-        # ── 章节目录查询：直接注入章节列表，不走关键词搜索 ──
+        # ── 章节目录查询：直接注入章节列表/详情，不走关键词搜索 ──
         if active_books and self._is_chapter_query(user_msg):
-            # 提取可能的章节编号
             chapter_num_match = re.search(r'第\s*([一二三四五六七八九十\d]+)\s*章', user_msg)
+            cn_map = {'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10,
+                      '十一':11,'十二':12,'十三':13,'十四':14,'十五':15}
+            detail = None
             if chapter_num_match:
                 num_str = chapter_num_match.group(1)
-                cn_map = {'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10,
-                          '十一':11,'十二':12,'十三':13,'十四':14,'十五':15}
-                num = cn_map.get(num_str) or int(num_str) if num_str.isdigit() else None
+                num = cn_map.get(num_str) or (int(num_str) if num_str.isdigit() else None)
                 if num:
                     detail = self._format_chapter_detail(active_books, num)
-                    if detail:
-                        context_parts.append(detail)
-            if not context_parts or len(context_parts) == 1:  # 只有教材摘要，没有章节详情
+            if detail:
+                # 章节详情 + 完整目录（让模型同时看到局部和全局）
+                context_parts.append(detail)
+                outline = self._format_chapter_outline(active_books)
+                if outline:
+                    context_parts.append(outline)
+            else:
+                # 只问目录，给完整章节目录
                 outline = self._format_chapter_outline(active_books)
                 if outline:
                     context_parts.append(outline)
