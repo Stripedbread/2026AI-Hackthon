@@ -22,6 +22,7 @@ data/uploads/
 
 # 推送脚本（仅本地使用）
 push_all.ps1
+push_all.bat
 
 # 系统文件
 .DS_Store
